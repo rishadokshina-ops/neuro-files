@@ -13,21 +13,34 @@ CONF = [
      "btn": "Забрать материал", "replies": ["Отправила в директ 📩", "Лови в директе 🔥", "Проверь директ ⚡", "Уже в директе 💸"]},
 ]
 
-# ---------- Лид-магнит neuro.risha: чек-лист за подписку ----------
-LEAD_WORDS = ["claude", "клод", "клауд"]
-CHECK_WORDS = ["чек-лист", "чеклист", "чек лист"]
-PDF_PATH = "/opt/neuro-bot/files/checklist_claude.pdf"
-PDF_URL = "https://neurorisha.ru/ig/checklist.pdf"
-T_HELLO = ("Привет! Я Риша 🔥 Показываю на своём примере, как с нуля автоматизировать бизнес с помощью Claude. "
-           "Твой чек-лист «10 процессов бизнеса, которые можно автоматизировать в Claude» уже готов 👇")
-B_GET = "Получить чек-лист 📄"
-T_SUB = ("Почти твой! 🔥 Чек-лист отдаю своим: подпишись на @neuro.risha. Здесь я каждый день показываю путь с нуля: "
-         "кейсы, цифры, рабочие связки нейросетей. Подписался(ась)? Жми 👇")
-T_NOSUB = "Пока не вижу подписку 🙈 Проверь, что нажал(а) «Подписаться» на @neuro.risha, и жми ещё раз 👇"
-B_CHECK = "Готово, проверить ✅"
-T_PDF = ("Лови свой чек-лист 🔥 Отметь галочками, что сейчас делаешь руками, и начни с 1–2 пунктов. "
-         "Дальше будет ещё мощнее, следи за сторис 💸")
-B_PDF = "Скачать чек-лист 📄"
+# ---------- Лид-магниты neuro.risha: всё в keywords.json, выдача только после проверки подписки ----------
+import json, re
+KW_PATH = "/opt/neuro-bot/keywords.json"
+BASE_URL = "https://neurorisha.ru/ig/f"
+
+def magnets():
+    """Читается при каждом сообщении: правишь keywords.json — изменения работают без перезапуска."""
+    try:
+        with open(KW_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as ex:
+        print("KEYWORDS error", ex)
+        return {}
+
+def has_word(text, words):
+    """Целое слово, а не кусок: «рост» сработает, а «просто» и «простой» — нет."""
+    t = (text or "").lower().replace("ё", "е")
+    for w in words:
+        w = w.lower().replace("ё", "е").strip()
+        if w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", t):
+            return True
+    return False
+
+def find_magnet(text, field="words"):
+    for key, m in magnets().items():
+        if has_word(text, m.get(field, [])):
+            return key, m
+    return None, None
 
 ACC = {}
 seen = set()
@@ -77,7 +90,7 @@ async def send_dm(acc, recipient, src, text):
     if not await post_msg(acc, recipient, msg, "DM button:"):
         await post_msg(acc, recipient, {"text": f"{text}\n{link}"}, "DM text:")
 
-async def ask(acc, recipient, text, title, payload):
+async def ask(acc, recipient, text, title, payload, word="ЧЕК-ЛИСТ"):
     """Сообщение с одной кнопкой: сначала быстрый ответ, затем postback, затем просто текст."""
     qr = {"text": text, "quick_replies": [{"content_type": "text", "title": title, "payload": payload}]}
     if await post_msg(acc, recipient, qr, "ASK quick"):
@@ -86,7 +99,7 @@ async def ask(acc, recipient, text, title, payload):
           "buttons": [{"type": "postback", "title": title, "payload": payload}]}}}
     if await post_msg(acc, recipient, pb, "ASK postback"):
         return
-    await post_msg(acc, recipient, {"text": text + "\n\nНапиши в ответ: ЧЕК-ЛИСТ"}, "ASK text")
+    await post_msg(acc, recipient, {"text": text + f"\n\nНапиши в ответ: {word}"}, "ASK text")
 
 async def is_follower(acc, uid):
     r = await client.get(f"{API}/{uid}", params={"fields": "username,is_user_follow_business",
@@ -96,32 +109,47 @@ async def is_follower(acc, uid):
         return None
     return r.json().get("is_user_follow_business")
 
-async def send_pdf(acc, uid):
+async def send_pdf(acc, uid, key, m):
     rec = {"id": uid}
-    await post_msg(acc, rec, {"text": T_PDF}, "PDF text")
-    if await post_msg(acc, rec, {"attachment": {"type": "file", "payload": {"url": PDF_URL}}}, "PDF file"):
+    url = f"{BASE_URL}/{key}.pdf"
+    await post_msg(acc, rec, {"text": m["done"]}, "PDF text " + key)
+    if await post_msg(acc, rec, {"attachment": {"type": "file", "payload": {"url": url}}}, "PDF file " + key):
         return
-    btn = {"attachment": {"type": "template", "payload": {"template_type": "button", "text": "Твой чек-лист 👇",
-           "buttons": [{"type": "web_url", "url": PDF_URL, "title": B_PDF}]}}}
-    if not await post_msg(acc, rec, btn, "PDF button"):
-        await post_msg(acc, rec, {"text": PDF_URL}, "PDF link")
+    btn = {"attachment": {"type": "template", "payload": {"template_type": "button", "text": "Твой файл 👇",
+           "buttons": [{"type": "web_url", "url": url, "title": m["btn_file"]}]}}}
+    if not await post_msg(acc, rec, btn, "PDF button " + key):
+        await post_msg(acc, rec, {"text": url}, "PDF link " + key)
 
-async def check_and_send(acc, uid):
+async def check_and_send(acc, uid, key, m):
     f = await is_follower(acc, uid)
     if f is None:
-        print("FOLLOW unknown -> send anyway", uid)
-        await send_pdf(acc, uid)
+        print("FOLLOW unknown -> send anyway", uid, key)
+        await send_pdf(acc, uid, key, m)
     elif f:
-        tries.pop(uid, None)
-        await send_pdf(acc, uid)
+        tries.pop((uid, key), None)
+        await send_pdf(acc, uid, key, m)
     else:
-        n = tries.get(uid, 0)
-        tries[uid] = n + 1
-        await ask(acc, {"id": uid}, T_SUB if n == 0 else T_NOSUB, B_CHECK, "CHECK_SUB")
+        n = tries.get((uid, key), 0)
+        tries[(uid, key)] = n + 1
+        word = (m.get("reply_words") or ["ЧЕК-ЛИСТ"])[0].upper()
+        await ask(acc, {"id": uid}, m["sub"] if n == 0 else m["nosub"], m["btn_check"], "CHECK:" + key, word)
+
+def hello(acc, recipient, key, m):
+    word = (m.get("reply_words") or ["ЧЕК-ЛИСТ"])[0].upper()
+    return ask(acc, recipient, m["hello"], m["btn_get"], "GET:" + key, word)
 
 @app.get("/ig/checklist.pdf")
 async def checklist():
-    return FileResponse(PDF_PATH, media_type="application/pdf", filename="checklist_10_processov_claude.pdf")
+    m = magnets().get("checklist", {})
+    return FileResponse(m.get("file", "/opt/neuro-bot/files/checklist_claude.pdf"), media_type="application/pdf",
+                        filename=m.get("file_name", "checklist.pdf"))
+
+@app.get("/ig/f/{key}.pdf")
+async def magnet_file(key: str):
+    m = magnets().get(key)
+    if not m or not os.path.exists(m.get("file", "")):
+        return Response(status_code=404)
+    return FileResponse(m["file"], media_type="application/pdf", filename=m.get("file_name", key + ".pdf"))
 
 @app.get("/ig/webhook")
 async def verify(request: Request):
@@ -149,9 +177,12 @@ async def webhook(request: Request):
             if str(v.get("from", {}).get("id")) == me or cid in seen:
                 continue
             text = (v.get("text") or "").lower()
-            if neuro and any(w in text for w in LEAD_WORDS):
+            key, m = find_magnet(text) if neuro else (None, None)
+            replies = acc["replies"]
+            if key:
                 seen.add(cid)
-                await ask(acc, {"comment_id": cid}, T_HELLO, B_GET, "GET_PDF")
+                await hello(acc, {"comment_id": cid}, key, m)
+                replies = m.get("comment_replies") or replies
             else:
                 c = find_camp(acc, v.get("text"))
                 if not c:
@@ -159,7 +190,7 @@ async def webhook(request: Request):
                 seen.add(cid)
                 await send_dm(acc, {"comment_id": cid}, f"c{c[0]}_igc", c[1])
             r = await client.post(f"{API}/{cid}/replies",
-                                  params={"access_token": acc["token"], "message": random.choice(acc["replies"])})
+                                  params={"access_token": acc["token"], "message": random.choice(replies)})
             print("Reply:", acc["name"], r.status_code, r.text)
         for m in e.get("messaging", []):
             uid = str(m.get("sender", {}).get("id"))
@@ -173,13 +204,25 @@ async def webhook(request: Request):
             payload = pbk.get("payload") or (msg.get("quick_reply") or {}).get("payload")
             text = (msg.get("text") or "").lower()
             if neuro:
-                if payload in ("GET_PDF", "CHECK_SUB") or any(w in text for w in CHECK_WORDS):
+                key = None
+                if payload and ":" in payload:
+                    key = payload.split(":", 1)[1]
+                elif payload in ("GET_PDF", "CHECK_SUB"):  # старые кнопки из прошлой версии
+                    key = "checklist"
+                mg = magnets()
+                if key in mg:
                     seen.add(mid)
-                    await check_and_send(acc, uid)
+                    await check_and_send(acc, uid, key, mg[key])
                     continue
-                if any(w in text for w in LEAD_WORDS):
+                key, m = find_magnet(text, "reply_words")
+                if key:
                     seen.add(mid)
-                    await ask(acc, {"id": uid}, T_HELLO, B_GET, "GET_PDF")
+                    await check_and_send(acc, uid, key, m)
+                    continue
+                key, m = find_magnet(text)
+                if key:
+                    seen.add(mid)
+                    await hello(acc, {"id": uid}, key, m)
                     continue
             c = find_camp(acc, msg.get("text"))
             if c:
